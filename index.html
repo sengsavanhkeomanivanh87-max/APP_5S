@@ -2,8 +2,16 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>5ส — ระบบบันทึกกิจกรรม</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#146356">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="5ส">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
@@ -539,9 +547,21 @@
     </div>
 
     <div class="panel">
-      <h2>รายชื่อที่ยังไม่บันทึกกิจกรรมเดือนนี้</h2>
-      <div class="note" style="margin:0 0 14px;">เทียบจากรายชื่อพนักงานของแต่ละแผนกกับผู้ที่บันทึกกิจกรรมแล้วในเดือนที่เลือก (ใช้ได้เฉพาะแผนกที่มีรายชื่อพนักงานอยู่ในระบบ)</div>
+      <h2>รายชื่อที่ยังไม่บันทึกกิจกรรม (แยกตามสัปดาห์)</h2>
+      <div class="note" style="margin:0 0 14px;">เทียบจากรายชื่อพนักงานของแต่ละแผนกกับผู้ที่บันทึกกิจกรรมแล้ว <b>เฉพาะสัปดาห์ที่เลือก</b> ในเดือนนี้ (ขึ้นสัปดาห์ใหม่นับใหม่ทุกครั้ง ใช้ได้เฉพาะแผนกที่มีรายชื่อพนักงานอยู่ในระบบ)</div>
+      <div class="weekpick" id="pending-week-tabs" style="margin-bottom:14px;">
+        <div class="weekbtn" data-week="W01">W01</div>
+        <div class="weekbtn" data-week="W02">W02</div>
+        <div class="weekbtn" data-week="W03">W03</div>
+        <div class="weekbtn" data-week="W04">W04</div>
+      </div>
       <div id="pending-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>รายชื่อที่ยังไม่บันทึกกิจกรรมเดือนนี้</h2>
+      <div class="note" style="margin:0 0 14px;">เทียบจากรายชื่อพนักงานของแต่ละแผนกกับผู้ที่บันทึกกิจกรรมแล้วในเดือนที่เลือก (สะสมทั้งเดือน ใช้ได้เฉพาะแผนกที่มีรายชื่อพนักงานอยู่ในระบบ)</div>
+      <div id="pending-list-month"></div>
     </div>
 
     <div class="panel">
@@ -890,6 +910,7 @@ let activities = [];
 let activitiesById = {};
 let selectedWeek = null;
 let selectedMonthKey = null;
+let lastDashboardRows = [];
 let pendingBefore = null;
 let pendingAfter = null;
 let editingId = null;
@@ -1842,6 +1863,11 @@ function safeMonthKey(a){
 function getAvailableMonthKeys(){
   const keys = new Set(activities.map(a=>safeMonthKey(a)).filter(Boolean));
   keys.add(monthKeyOf(todayStr()));
+  // เปิดให้เลือกดูล่วงหน้าได้ถึง ธ.ค. 2570 (ธ.ค. 2027) แม้ยังไม่มีข้อมูลกิจกรรมในเดือนนั้นเลยก็ตาม
+  ["2026-10","2026-11","2026-12",
+   "2027-01","2027-02","2027-03","2027-04","2027-05","2027-06",
+   "2027-07","2027-08","2027-09","2027-10","2027-11","2027-12"
+  ].forEach(k=>keys.add(k));
   return [...keys].sort().reverse();
 }
 function populateMonthSelect(){
@@ -1881,6 +1907,7 @@ function computeDashboard(){
 function renderDashboard(){
   populateMonthSelect();
   const rows = computeDashboard();
+  lastDashboardRows = rows;
   const totalEmployees = rows.reduce((s,r)=>s+r.n,0);
   const totalTargetMonth = rows.reduce((s,r)=>s+r.targetMonth,0);
   const totalWork = rows.reduce((s,r)=>s+r.total,0);
@@ -2047,8 +2074,10 @@ function renderWeeklyCharts(rows){
   });
 }
 
-function computePendingByDept(rows){
-  const filtered = activities.filter(a=>safeMonthKey(a) === selectedMonthKey);
+let pendingWeek = null;
+
+function computePendingByDept(rows, week){
+  const filtered = activities.filter(a=>safeMonthKey(a) === selectedMonthKey && (!week || a.week === week));
   const result = [];
   rows.forEach(r=>{
     const roster = EMPLOYEES_BY_DEPT[r.name];
@@ -2065,13 +2094,48 @@ function computePendingByDept(rows){
 }
 
 function renderPendingList(rows){
+  // แท็บสัปดาห์: ตั้งค่าเริ่มต้นเป็นสัปดาห์ปัจจุบัน ถ้าเดือนที่เลือกคือเดือนนี้ ไม่งั้นเริ่มที่ W01
+  if(!pendingWeek){
+    pendingWeek = (selectedMonthKey === monthKeyOf(todayStr())) ? weekFromDate(todayStr()) : "W01";
+  }
+  const tabsEl = document.getElementById("pending-week-tabs");
+  if(tabsEl && !tabsEl.dataset.bound){
+    tabsEl.dataset.bound = "1";
+    tabsEl.querySelectorAll(".weekbtn").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        pendingWeek = btn.dataset.week;
+        renderPendingList(lastDashboardRows || []);
+      });
+    });
+  }
+  if(tabsEl){
+    tabsEl.querySelectorAll(".weekbtn").forEach(btn=>{
+      btn.classList.toggle("sel", btn.dataset.week === pendingWeek);
+    });
+  }
+
   const el = document.getElementById("pending-list");
-  const data = computePendingByDept(rows);
+  const data = computePendingByDept(rows, pendingWeek);
   if(data.length === 0){
-    el.innerHTML = '<div class="empty">ทุกแผนกที่มีรายชื่อในระบบบันทึกครบทุกคนแล้วสำหรับเดือนนี้</div>';
+    el.innerHTML = '<div class="empty">ทุกแผนกที่มีรายชื่อในระบบบันทึกครบทุกคนแล้วสำหรับ '+pendingWeek+'</div>';
+  } else {
+    el.innerHTML = data.map(d=>`
+      <div style="margin-bottom:14px;">
+        <div style="font-weight:600;font-size:13.5px;margin-bottom:4px;">${escapeHtml(d.dept)}
+          <span style="font-weight:400;color:var(--danger);">(${d.pending.length} คน ยังไม่บันทึก)</span>
+        </div>
+        <div style="font-size:12.5px;color:var(--muted);line-height:1.6;">${d.pending.map(escapeHtml).join(", ")}</div>
+      </div>
+    `).join("");
+  }
+
+  const elMonth = document.getElementById("pending-list-month");
+  const dataMonth = computePendingByDept(rows, null);
+  if(dataMonth.length === 0){
+    elMonth.innerHTML = '<div class="empty">ทุกแผนกที่มีรายชื่อในระบบบันทึกครบทุกคนแล้วสำหรับเดือนนี้</div>';
     return;
   }
-  el.innerHTML = data.map(d=>`
+  elMonth.innerHTML = dataMonth.map(d=>`
     <div style="margin-bottom:14px;">
       <div style="font-weight:600;font-size:13.5px;margin-bottom:4px;">${escapeHtml(d.dept)}
         <span style="font-weight:400;color:var(--danger);">(${d.pending.length} คน ยังไม่บันทึก)</span>
